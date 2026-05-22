@@ -24,7 +24,7 @@ pipeline {
 
         stage('Install Python dependencies') {
             steps {
-                bat 'pip install -r requirement.txt'
+                bat 'python -m pip install -r requirement.txt'
             }
         }
 
@@ -74,27 +74,27 @@ pipeline {
             }
             steps {
                 script {
-                    // 1) Read raw contents (may include dotenv banners)
+
                     def raw = readFile 'ci-result.json'
                     echo "Raw ci-result.json:\n${raw}"
 
-                    // 2) Find first '{' and keep from there onwards
                     def braceIndex = raw.indexOf('{')
+
                     if (braceIndex < 0) {
                         echo "ci-result.json does not contain a JSON object start: ${raw}"
                         error("SLA summary failed: no JSON object found in ci-result.json")
                     }
+
                     def jsonText = raw.substring(braceIndex).trim()
 
-                    // 3) Overwrite file with clean JSON
                     writeFile file: 'ci-result.json', text: jsonText
 
-                    // 4) Parse JSON
                     def json = readJSON file: 'ci-result.json'
+
                     echo "Debug: top-level keys = ${json.keySet()}"
 
-                    // Safely extract results list
                     def results = []
+
                     if (json.results instanceof List) {
                         results = json.results
                     } else if (json["results"] instanceof List) {
@@ -103,23 +103,28 @@ pipeline {
                         echo "Warning: could not find results array in parsed JSON: ${json}"
                     }
 
-                    // Normalize breached flags
                     def breachedFlags = results.collect { r ->
                         r?.breached ? true : false
                     }
+
                     echo "Debug: breached flags = ${breachedFlags}"
+
                     def breached = breachedFlags.contains(true)
 
-                    // 5) Build human-readable summary
                     def lines = []
+
                     lines << "SLA analysis for PR:"
                     lines << ""
+
                     results.each { r ->
-                        def cpu     = r.mlResult?.cpu_time     ?: 0
+
+                        def cpu     = r.mlResult?.cpu_time ?: 0
                         def session = r.mlResult?.session_time ?: 0
+
                         def status  = (r.breached ? "BREACHED" : "OK")
 
                         def hottestList = r.hottestStatements ?: []
+
                         def hottest = hottestList
                                 ? hottestList.max { (it.combined ?: 0) as BigDecimal }
                                 : null
@@ -128,25 +133,28 @@ pipeline {
 
                         if (hottest) {
                             lines << "  - Hottest stmt: line ${hottest.line}, type ${hottest.type}, combined CPU=${hottest.combined}"
-                            lines << "  - Suggestion: Consider reducing iterations or moving invariant work out of this statement's loop to lower CPU without changing logic."
+                            lines << "  - Suggestion: Consider reducing iterations or moving invariant work out of this statement's loop."
                         }
 
                         if (r.mlResult?.error) {
                             lines << "  - ML Error: ${r.mlResult.error}"
                         }
                     }
+
                     lines << ""
                     lines << "Thresholds: SLA_THRESHOLD=${env.SLA_THRESHOLD}s, SESSION_THRESHOLD=${env.SESSION_THRESHOLD}s"
 
                     def summaryMsg = lines.join("\n")
+
                     echo summaryMsg
+
                     env.SLA_SUMMARY = summaryMsg
 
                     if (breached) {
-                        echo "SLA BREACHED for at least one COBOL program. [pipeline v2]"
+                        echo "SLA BREACHED for at least one COBOL program."
                         error("SLA breached; failing build.")
                     } else {
-                        echo "All analyzed COBOL programs are within SLA. [pipeline v2]"
+                        echo "All analyzed COBOL programs are within SLA."
                     }
                 }
             }
@@ -156,33 +164,41 @@ pipeline {
     post {
         always {
             script {
+
                 if (!env.CHANGE_ID || !env.SLA_SUMMARY) {
                     return
                 }
 
                 def prNumber = env.CHANGE_ID
                 def repo = "Tanvi-vilaskar/ci-sla-guardian"
+
                 def apiUrl = "https://api.github.com/repos/${repo}/issues/${prNumber}/comments"
 
                 writeFile file: 'sla-comment.txt', text: env.SLA_SUMMARY
 
                 try {
+
                     withCredentials([string(credentialsId: 'github-token', variable: 'GHTOKEN')]) {
+
                         bat """
                         setlocal ENABLEDELAYEDEXPANSION
                         set BODY=
+
                         for /f "usebackq delims=" %%A in ("sla-comment.txt") do (
                             set "BODY=!BODY!%%A\\n"
                         )
+
                         curl -H "Authorization: token %GHTOKEN%" ^
                              -H "Content-Type: application/json" ^
                              -d "{\\"body\\": \\"!BODY!\\n(Jenkins job: ${env.JOB_NAME} #${env.BUILD_NUMBER})\\"}" ^
                              ${apiUrl}
+
                         endlocal
                         """
                     }
+
                 } catch (e) {
-                    echo "Skipping PR comment (credentials missing or curl error): ${e.getMessage()}"
+                    echo "Skipping PR comment: ${e.getMessage()}"
                 }
             }
         }
