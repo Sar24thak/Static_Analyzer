@@ -1,4 +1,28 @@
-node_modules
-.vscode-test/
-*.vsix
+# Node modules
+node_modules/
+
+# Environment variables
 .env
+
+# VS Code
+.vscode/
+.vscode-test/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Output folders
+output/
+dist/
+build/
+
+# Logs
+*.log
+
+# VSIX files
+*.vsix
+
+# OS files
+.DS_Store
+Thumbs.db
